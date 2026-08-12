@@ -1,0 +1,39 @@
+﻿# {{ date }} 审核清单
+
+> ⚠️ **发布时请勾选「AI 辅助创作」标签**(平台 2024 起合规要求)
+{% if manifest | selectattr('is_mock') | list %}
+> 🚨 **警告:本批次含 MOCK 模板稿件(`is_mock=MOCK!` 的行),绝对不要发布**。请用 `python -m src.main --once`(去掉 `--mock`)重跑。
+{% endif %}
+
+## 今日产出: {{ count }} 篇
+详见同目录下 `manifest.csv`。
+
+## 推荐工作流(单篇约 2 分钟)
+
+```powershell
+# 1. 进入单篇目录
+cd drafts\{{ date }}\{{ first_id }}-*
+
+# 2. 复制公众号版到剪贴板
+python -m src.publish.copy . --platform wechat
+
+# 3. 浏览器打开 135editor.com → 粘贴 → 微调样式
+# 4. 复制到公众号编辑器 → 加封面 → 发布
+
+# 5. 标记已发布
+python -m src.publish.update_status . --status published --platform wechat
+
+# 6. 百家号重复 2-5 步(platform 改 bjh)
+```
+
+## 选题速览
+
+| ID | 主标题 | 分类 | 字数 | Mock | 状态 |
+|----|--------|------|------|------|------|
+{% for item in manifest %}| {{ item.id }} | {{ item.title }} | {{ item.category }} | {{ item.char_count }} | {{ item.is_mock or '-' }} | {{ item.status }} |
+{% endfor %}
+
+## 状态说明
+- `pending` — 待发布
+- `published` — 已发布
+- `rejected` — 不发布(选题/质量不行)

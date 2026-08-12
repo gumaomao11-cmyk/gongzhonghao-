@@ -1,0 +1,53 @@
+﻿[project]
+name = "autopost"
+version = "0.1.0"
+description = "公众号/百家号每日爆款文自动生成系统 — Local Python pipeline that scrapes hot topics from Weibo/Baidu/Zhihu and uses an LLM to draft platform-ready articles."
+readme = "README.md"
+license = {file = "LICENSE"}
+requires-python = ">=3.10"
+authors = [{name = "autopost contributors"}]
+keywords = ["wechat", "baijiahao", "content", "llm", "automation"]
+
+dependencies = [
+    "httpx>=0.27",
+    "beautifulsoup4>=4.12",
+    "lxml>=5.0",
+    "openai>=1.30",
+    "apscheduler>=3.10",
+    "loguru>=0.7",
+    "pydantic>=2.6",
+    "PyYAML>=6.0",
+    "jinja2>=3.1",
+    "rich>=13.7",
+    "pyperclip>=1.8",
+    "plyer>=2.1",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "ruff>=0.4",
+]
+
+[project.scripts]
+autopost = "src.main:cli"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP"]
+ignore = ["E501"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

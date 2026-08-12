@@ -1,0 +1,39 @@
+﻿# Copy this file to config.yaml and fill in your real values.
+# config.yaml is gitignored; do NOT commit it.
+
+volcengine:
+  api_key: "YOUR_API_KEY_HERE"
+  base_url: "https://ark.cn-beijing.volces.com/api/v3"
+
+  # IMPORTANT: model name must EXACTLY match the ID in your volcengine console.
+  # Go to https://console.volcengine.com/ark -> 在线推理 -> 模型列表, then copy.
+  # Common examples (verify yours exists before using):
+  #   deepseek-v3-241226             # DeepSeek V3
+  #   deepseek-r1-250120             # DeepSeek R1 (reasoning)
+  #   doubao-1-5-pro-32k-250115      # Doubao 1.5 Pro
+  #   doubao-seed-1-6-250615         # Doubao 1.6
+  #   doubao-lite-32k-240615         # Doubao Lite (cheapest)
+  model: "deepseek-v3-241226"
+
+  daily_token_budget: 100000    # hard cap; pipeline aborts if exceeded
+  rpm_limit: 20                 # requests per minute
+
+schedule:
+  run_at: "06:00"               # daily trigger time (24h)
+
+output:
+  daily_count: 20
+  drafts_dir: "./drafts"
+
+platforms:
+  wechat: { enabled: true,  char_min: 1500, char_max: 2500 }
+  bjh:    { enabled: true,  char_min: 800,  char_max: 1500 }
+
+blacklist_file: "./data/blacklist.txt"
+generated_topics_file: "./data/generated_topics.jsonl"
+hot_topics_db: "./data/hot_topics.db"
+logs_dir: "./logs"
+
+# Tip: if you see "InvalidEndpointOrModel.NotFound", run:
+#   python -m src.main --check
+# to validate the model name and api_key with a single test call.

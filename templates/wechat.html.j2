@@ -1,0 +1,18 @@
+﻿<section data-role="paragraph" style="font-family: -apple-system, BlinkMacSystemFont, 'PingFang SC', 'Microsoft YaHei', sans-serif; font-size: 16px; color: #333; line-height: 1.75; max-width: 100%; margin: 0 auto;">
+  <p style="text-align: center; color: #888; font-size: 14px; margin-bottom: 24px;">⚠️ 本文由 AI 辅助创作</p>
+
+  {% for paragraph in paragraphs %}
+  {% if paragraph.type == 'h2' %}
+  <h2 style="font-size: 18px; font-weight: bold; color: #1a1a1a; background: linear-gradient(to right, #fef3c7 0%, transparent 100%); padding: 8px 12px; border-left: 4px solid #f59e0b; margin: 28px 0 16px;">{{ paragraph.text }}</h2>
+  {% elif paragraph.type == 'blockquote' %}
+  <blockquote style="border-left: 4px solid #3b82f6; background: #eff6ff; padding: 12px 16px; margin: 16px 0; color: #1e40af; font-style: italic;">{{ paragraph.text }}</blockquote>
+  {% elif paragraph.type == 'quote' %}
+  <blockquote style="border-left: 4px solid #10b981; background: #ecfdf5; padding: 12px 16px; margin: 16px 0; color: #065f46;"><strong>{{ paragraph.text }}</strong></blockquote>
+  {% else %}
+  <p style="margin: 12px 0; text-align: justify;">{{ paragraph.text }}</p>
+  {% endif %}
+  {% endfor %}
+
+  <p style="text-align: center; color: #888; font-size: 14px; margin-top: 32px; padding-top: 16px; border-top: 1px dashed #ddd;">— 完 —</p>
+  <p style="text-align: center; color: #aaa; font-size: 12px; margin-top: 16px;">觉得有用?点个「在看」,下篇更精彩 👇</p>
+</section>

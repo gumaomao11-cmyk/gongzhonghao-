@@ -1,0 +1,16 @@
+﻿{{ ai_notice }}
+{% for paragraph in paragraphs %}
+{% if paragraph.type == 'h2' %}
+【{{ paragraph.text }}】
+{% elif paragraph.type == 'quote' %}
+💡 {{ paragraph.text }}
+{% elif paragraph.type == 'highlight' %}
+🔥 {{ paragraph.text }}
+{% else %}
+{{ paragraph.text }}
+{% endif %}
+{% endfor %}
+
+— end —
+
+{% for tag in tags %}#{{ tag }} {% endfor %}
