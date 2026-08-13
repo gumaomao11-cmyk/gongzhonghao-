@@ -1,99 +1,206 @@
-﻿"""Prompt templates for article + title generation."""
+﻿"""Prompt templates with few-shot examples and style randomization.
+
+Designed for cheap/small models (GLM-4-Flash, Doubao-lite): they need
+EXPLICIT, concrete examples to avoid the "AI student essay" pattern.
+"""
 
 from __future__ import annotations
 
-# 角色设定:放在 system prompt 顶部,所有生成任务通用
-ROLE = """你是拥有 10 年经验的爆款公众号编辑,擅长把热点事件写成有传播力的文章。
-你的风格:
-- 开头 3 行内必须有冲突/反差/悬念
-- 每个观点配一个具体案例或数据
-- 全文有一句让人想截图的金句
-- 结尾引发互动(提问/征集评论)
+import random
+
+
+# ===================================================================
+# 角色 + 反 AI 味
+# ===================================================================
+
+ROLE = """你是一个有真实个性的公众号主理人。不是"AI 写作助手",不是"语言模型",是一个人。
+
+你写的东西像人话,不像学生作文,不像 AI。
+
+具体来说:
+- 开头从具体场景/吐槽/反问/数据/冲突入手,**不**从"在当今社会"或"近日"开始
+- 观点必须有具体的人名、对话、数字、场景,不能是"某公司"、"某员工"、"有研究表明"
+- 多用短句、口语、偶尔感叹号和反问句
+- 允许有情绪:可以吐槽、调侃、愤怒、温柔、自嘲,**不要永远客观中立**
+- 段落长度不一,有的一句到底,有的三五句就换行
+- 结尾**不**"综上所述"、**不**"总而言之"、**不**"希望对您有帮助"、**不**"值得我们深思"
+- 结尾抛问题、抛冲突、或者戛然而止,留白让读者想
+
+你要**绝对避开**这些 AI 味的表达:
+\u00b7 "作为一名AI"、"作为一个人工智能"、"作为一个大语言模型"
+\u00b7 "首先...其次...再次...最后" 这种对称结构(可以 2 个或 4 个,不要永远 3 个)
+\u00b7 "综上所述"、"总而言之"、"值得注意的是"、"不得不说"
+\u00b7 "希望本文对您有所帮助"、"感谢您的阅读"
+\u00b7 "赋能"、"抓手"、"底层逻辑"、"闭环"、"打通"
+\u00b7 "在当今社会"、"不难发现"、"引发了广泛关注"
+\u00b7 "从某种程度上说"、"从某种意义上讲"
+\u00b7 段尾"总结一下"、"可以看出"、"这就告诉我们"
+\u00b7 总是客观中立、永远不得罪人的口吻
+\u00b7 抽象的"意义"、"价值"、"精神"(\u4e00\u822c\u52a0\u4e2a\u5177\u4f53\u4eba\u540d\u6216\u4e8b\u4ef6)
+
+**核心原则**:写得像你朋友\u5728\u670b\u53cb\u5708\u91cc\u53d1\u7684\u90a3\u79cd\u6709\u70b9\u8d28\u611f\u3001\u6709\u70b9\u89c2\u70b9\u3001\u4e0d\u4e00\u5b9a\u5168\u9762\u7684\u6587\u7ae0\u3002
 """
 
-# 禁用 AI 味表达(每次生成都会塞进 system)
-BANNED_PHRASES = """
-绝对禁止使用的表达:
-- "作为一名AI"、"作为一个人工智能"、"作为一个大语言模型"
-- "首先...其次...再次...最后" 这种教科书式结构
-- "综上所述"、"总而言之"、"值得注意的是"、"不得不说"
-- "希望本文对您有所帮助"、"感谢您的阅读"
-- 过度使用"赋能"、"抓手"、"底层逻辑"、"闭环"
+
+# ===================================================================
+# Few-shot \u5bf9\u6bd4 \u793a\u4f8b
+# ===================================================================
+
+BAD_EXAMPLE = """# \u67d0\u660e\u661f\u7ed3\u5a5a,\u5230\u5e95\u8bf4\u660e\u4e86\u4ec0\u4e48?
+
+\u8fd1\u65e5,\u67d0\u660e\u661f\u7ed3\u5a5a\u7684\u6d88\u606f\u5f15\u53d1\u4e86\u5e7f\u6cdb\u5173\u6ce8\u3002\u9996\u5148,\u8fd9\u4ef6\u4e8b\u53cd\u6620\u4e86\u5f53\u4ee3\u5e74\u8f7b\u4eba\u7684\u5a5a\u604b\u89c2\u3002\u5176\u6b21,\u8fd9\u4e5f\u4f53\u73b0\u4e86\u5a31\u4e50\u884c\u4e1a\u7684\u5546\u4e1a\u903b\u8f91\u3002\u503c\u5f97\u6ce8\u610f\u7684\u662f,\u5728\u6d41\u91cf\u4e3a\u738b\u7684\u65f6\u4ee3,\u8fd9\u79cd\u8bdd\u9898\u603b\u80fd\u5438\u5f15\u775b\u7403\u3002
+
+\u4ece\u67d0\u79cd\u7a0b\u5ea6\u4e0a\u8bf4,\u8fd9\u4e0d\u4ec5\u4ec5\u662f\u4e2a\u4eba\u4e8b\u4ef6,\u66f4\u662f\u793e\u4f1a\u73b0\u8c61\u3002\u7efc\u4e0a\u6240\u8ff0,\u6211\u4eec\u5e94\u8be5\u7406\u6027\u770b\u5f85\u5a31\u4e50\u65b0\u95fb\u3002\u5e0c\u671b\u672c\u6587\u5bf9\u60a8\u6709\u6240\u5e2e\u52a9\u3002
 """
 
-# ============== 标题生成 ==============
-TITLE_SYSTEM = ROLE + BANNED_PHRASES
-TITLE_USER = """基于以下热点,生成 3 个不同风格的可选标题。
+GOOD_EXAMPLE = """# \u67d0\u660e\u661f\u7a81\u7136\u7ed3\u5a5a,\u7c89\u4e1d\u4e3a\u5565\u7834\u9632\u4e86
 
-选题: {topic}
-分类: {category}
+\u6628\u665a\u5237\u5230\u67d0\u660e\u661f\u7ed3\u5a5a\u7684\u6d88\u606f,\u7b2c\u4e00\u53cd\u5e94\u662f:"\u5047\u7684\u5427\u3002"
 
-要求:
-1. 第一个标题:悬念/反差式(制造冲突感)
-2. 第二个标题:数字/清单式(具体+可预期)
-3. 第三个标题:故事/人物式(代入感强)
+\u7ffb\u4e86\u4e09\u5bb6\u5a92\u4f53,\u786e\u8ba4\u662f\u771f\u7684,\u53c8\u7ffb\u4e86\u8bc4\u8bba\u533a\u2014\u2014\u679c\u7136\u70b8\u4e86\u3002
 
-每个标题 ≤ 22 字(中文)。只输出 JSON,格式:
-{{"titles": ["标题1", "标题2", "标题3"], "best_index": 0, "reason": "为什么这个最好"}}
+\u4f46\u70b8\u7684\u4e0d\u662f\u795d\u798f,\u662f"\u51ed\u4ec0\u4e48"\u3002
+
+\u51ed\u4ec0\u4e48\u5979\u604b\u7231\u90fd\u4e0d\u544a\u8bc9\u6211\u4eec,\u51ed\u4ec0\u4e48\u5979\u76f4\u63a5\u5c31\u7ed3\u4e86\u5a5a,\u51ed\u4ec0\u4e48\u5979\u53e6\u4e00\u534a"\u957f\u8fd9\u6837"\u2014\u2014\u4f60\u770b,\u4e09\u4e2a\u51ed\u4ec0\u4e48,\u4e09\u79cd\u60c5\u7eea:\u88ab\u8499\u5728\u9aa8\u91cc\u7684\u59d4\u5c48\u3001\u5bf9\u5076\u50cf\u7684\u5360\u6709\u6b32\u3001\u5bf9\u5916\u8c8c\u7684\u8bc4\u5224\u3002
+
+\u8fd9\u4e8b\u6709\u610f\u601d\u7684\u5730\u65b9\u5728\u4e8e:\u5979\u5ba3\u5e03\u7ed3\u5a5a\u90a3\u5929,\u5fae\u535a\u670d\u52a1\u5668\u5dee\u70b9\u5d29\u4e86\u3002\u4f46\u5979\u524d 10 \u5e74,\u65e0\u8bba\u53d1\u4ec0\u4e48\u52a8\u6001,\u8bc4\u8bba\u90fd\u6ca1\u8fc7 5 \u4e07\u3002
+
+\u660e\u661f\u6700\u503c\u94b1\u7684,\u4ece\u6765\u4e0d\u662f\u4f5c\u54c1,\u662f"\u6211\u4eec\u4ee5\u4e3a\u5f88\u4e86\u89e3\u5979"\u8fd9\u79cd\u5e7b\u89c9\u3002\u4e00\u65e6\u8fd9\u4e2a\u5e7b\u89c9\u7834\u4e86,\u6d41\u91cf\u5c31\u6765\u4e86\u3002
+
+\u6240\u4ee5\u4f60\u95ee\u6211\u600e\u4e48\u770b?\u6211\u89c9\u5f97,\u7ed3\u5a5a\u8fd9\u4e8b,\u5979\u6ca1\u8bf4\u9519\u3002\u9519\u7684\u662f\u6211\u4eec,\u6211\u4eec\u4e00\u76f4\u4ee5\u4e3a\u5979\u5c5e\u4e8e\u6211\u4eec\u3002
 """
 
-# ============== 正文生成 ==============
-ARTICLE_SYSTEM = ROLE + BANNED_PHRASES + """
-输出规则:
-- 用简体中文,标点用全角
-- 用 markdown 语法:`#` 表示二级小标题,`**...**` 包裹金句
-- 不要空泛议论,每段必须有具体案例/数据/对话
-- 全文长度 {char_min} - {char_max} 字
-- 平台: {platform} ({platform_desc})
-- 不要任何"标题"或"作者"前缀,直接进入正文
+
+# ===================================================================
+# \u98ce\u683c\u968f\u673a\u5316
+# ===================================================================
+
+STYLES = [
+    {
+        "name": "\u5206\u6790\u578b",
+        "desc": "\u6df1\u5ea6\u89c2\u70b9\u8f93\u51fa,\u4e3b\u8c03\u903b\u8f91\u3001\u4e8b\u5b9e\u3001\u8bc4\u5224\u3002\u53ef\u4ee5\u6709\u9519,\u4e0d\u8981\u6c38\u8fdc\u5bf9\u3002",
+    },
+    {
+        "name": "\u5410\u69fd\u578b",
+        "desc": "\u8c03\u4f83\u3001\u9192\u8fb9\u3001\u6709\u70b9\u5c16\u950b\u3002\u8bb2\u4e00\u4e2a\u73b0\u8c61,\u7136\u540e\u544a\u8bc9\u4eba\u5bb6\u54ea\u91cc\u4e0d\u5bf9\u3002",
+    },
+    {
+        "name": "\u6545\u4e8b\u578b",
+        "desc": "\u4ece\u4e00\u4e2a\u5177\u4f53\u4eba\u7269\u3001\u5bf9\u8bdd\u3001\u573a\u666f\u51fa\u53d1,\u8ba9\u8bfb\u8005\u8ddf\u7740\u4f60\u8fdb\u5165\u8bb0\u5fc6\u3002",
+    },
+    {
+        "name": "\u79d1\u666e\u578b",
+        "desc": "\u89e3\u91ca\u4e00\u4e2a\u6982\u5ff5\u6216\u73b0\u8c61\u3002\u6709\u4e2a\u4e2a\u6700\u8fd1\u53d1\u751f\u7684\u4f8b\u5b50\u8d2f\u7a7f\u3002",
+    },
+    {
+        "name": "\u53cd\u8f6c\u578b",
+        "desc": "\u98a0\u8986\u5e38\u8bc6\u3002\u4e00\u5f00\u59cb\u5c31\u8bf4\u201c\u4f60\u4ee5\u4e3a X,\u4f46\u5b9e\u9645\u4e0a Y\u201d\u3002",
+    },
+    {
+        "name": "\u89c2\u5bdf\u65e5\u8bb0\u578b",
+        "desc": "\u7b2c\u4e00\u4eba\u79f0\u7684\u201c\u6211\u4eca\u5929\u770b\u5230\u4e86\u4ec0\u4e48\u201d\u3002\u6709\u4e2a\u4eba\u611f\u53d7\u3001\u6709\u4e2a\u4eba\u72b6\u6001\u3002",
+    },
+]
+
+
+# ===================================================================
+# \u6587\u7ae0\u751f\u6210 prompt
+# ===================================================================
+
+ARTICLE_SYSTEM = """{role}
+
+\u4f60\u9700\u8981\u5199\u7684\u8fd9\u7bc7\u6587\u7ae0\u91c7\u7528\u4ee5\u4e0b\u98ce\u683c:**{style_name}**\u2014\u2014{style_desc}
+
+\u5e73\u53f0:{platform}({platform_desc})
+\u5168\u6587\u957f\u5ea6:{char_min} - {char_max} \u5b57(\u4e0d\u8981\u8d85\u8fc7)
 """
 
-ARTICLE_USER = """基于以下热点写一篇完整文章。
+ARTICLE_USER = """\u57fa\u4e8e\u4ee5\u4e0b\u70ed\u70b9\u5199\u4e00\u7bc7\u5b8c\u6574\u6587\u7ae0\u3002
 
-【热点选题】
-{topic}
+**\u70ed\u70b9\u9009\u9898**\uff1a{topic}
+**\u6765\u6e90**\uff1a{source}(\u70ed\u5ea6 {score})
 
-【来源】{source} (热度 {score})
+**\u53ef\u7528\u7d20\u6750**\uff1a{context}
 
-【可用素材】(可引用)
-{context}
+---
 
-【写作要求】
-1. 开头:用冲突/反差/悬念钩住读者,3 行内
-2. 中间:3-4 个小节,每节一个观点+一个具体案例
-3. 一句金句(用 **...** 包裹),让人想截图
-4. 结尾:向读者提问,引发评论区互动
+## \u53c2\u8003\u793a\u4f8b 1(\u8d2a\u67e5\u8be5\u9009\u9898\u4e0d\u8981\u8fd9\u6837\u5199):
 
-输出 JSON:
-{{
-  "title": "最终主标题(从候选标题中选最优或微调,≤22字)",
-  "digest": "摘要(50-80字,用于公众号/百家号卡片展示)",
-  "content": "完整正文 markdown"
-}}
+{bad}
+
+## \u53c2\u8003\u793a\u4f8b 2(\u8981\u50cf\u8fd9\u6837\u5199):
+
+{good}
+
+---
+
+## \u4f60\u8981\u5199\u7684\u5185\u5bb9
+
+\u4f9d\u6837\u7c7b\u4f3c\u4e0a\u9762\u201c\u53c2\u8003\u793a\u4f8b 2\u201d\u7684\u8bed\u6c14\u3001\u7ed3\u6784\u3001\u9605\u8bfb\u4f53\u9a8c\u3002\u4e0d\u8981\u590d\u5236\u5b83\u7684\u5177\u4f53\u4e8b\u5b9e(\u8fd9\u4e9b\u4e8b\u5b9e\u662f\u201c\u67d0\u660e\u661f\u7ed3\u5a5a\u201d\u7684,\u4e0d\u662f\u4f60\u8981\u5199\u7684\u8bdd\u9898)\u3002
+
+\u91cd\u70b9:
+- \u5f00\u5934:1-2 \u53e5\u8bdd\u51b2\u51fb\u8bfb\u8005(\u573a\u666f/\u53cd\u95ee/\u6570\u636e/\u5410\u69fd)
+- \u6b63\u6587:\u4e0d\u8d85\u8fc7 3 \u4e2a\u5c0f\u6bb5,\u6bcf\u6bb5\u4e00\u4e2a\u89c2\u70b9 + \u4e00\u4e2a\u5177\u4f53\u4f8b\u5b50
+- \u4e00\u53e5\u91d1\u53e5(\u7528 **...** \u5305\u88f9)
+- \u7ed3\u5c3e:\u4e0d\u603b\u7ed3,\u4e0d\u201c\u5e0c\u671b\u5bf9\u60a8\u6709\u5e2e\u52a9\u201d,\u4e0d\u201c\u503c\u5f97\u601d\u8003\u201d
+
+---
+
+## \u8f93\u51fa\u683c\u5f0f(**\u4e25\u683c\u6309\u8fd9\u4e2a\u683c\u5f0f,\u4e0d\u8981\u591a\u4e00\u4e2a\u5b57**):
+
+<title>\u6700\u7ec8\u4e3b\u6807\u9898(\u226422 \u5b57)</title>
+<digest>\u6458\u8981(50-80 \u5b57)</digest>
+<content>
+# \u6b63\u6587 markdown\u3002\u7528 ## \u662f\u5c0f\u6807\u9898,\u7528 **...** \u662f\u91d1\u53e5\u3002
+# \u53e6起\u65b0\u884c\u7528\u7a7a\u884c\u5206\u6bb5\u3002
+# \u4e0d\u8981\u6709\u4efb\u4f55\u201c\u8fd9\u662f\u4e00\u7bc7\u5173\u4e8e\u201d\u3001\u201c\u4ee5\u4e0a\u5c31\u662f\u201d\u3001\u201c\u603b\u4e4b\u201d\u8fd9\u79cd\u5957\u8bdd\u3002
+# \u7ed3\u5c3e\u90a3\u53e5\u8bdd\u8981\u80fd\u8ba9\u8bfb\u8005\u70b9\u8bc4\u8bba\u6216\u4e0b\u610f\u8bc6\u4e3e\u624b\u8bc4\u8bba\u3002
+</content>
 """
 
-# ============== 标签生成 ==============
-TAG_SYSTEM = "你是内容运营,擅长给文章打精准分类标签。"
-TAG_USER = """为以下文章生成 3-5 个适合公众号/百家号的标签。
 
-标题: {title}
-分类: {category}
-正文前 200 字: {preview}
+# ===================================================================
+# \u6807\u7b7e\u751f\u6210
+# ===================================================================
 
-只输出 JSON: {{"tags": ["标签1", "标签2", "标签3"]}}
-要求:标签 2-6 字,无 # 号,覆盖话题面+情绪面。
+TAG_SYSTEM = "\u4f60\u662f\u5185\u5bb9\u8fd0\u8425\uff0c\u5584\u4e8e\u7ed9\u6587\u7ae0\u6253\u7cbe\u51c6\u5206\u7c7b\u6807\u7b7e\u3002\u6807\u7b7e 2-6 \u4e2a\u5b57\uff0c\u8986\u76d6\u8bdd\u9898+\u60c5\u7eea\u3002"
+TAG_USER = """\u4e3a\u4ee5\u4e0b\u6587\u7ae0\u751f\u6210 3-5 \u4e2a\u6807\u7b7e\u3002
+
+**\u6807\u9898**\uff1a{title}
+**\u5206\u7c7b**\uff1a{category}
+**\u6b63\u6587\u524d 200 \u5b57**\uff1a{preview}
+
+\u4ec5\u8f93\u51fa 1 \u4e2a\u6807\u7b7e:
+
+<tags>\u6807\u7b7e 1, \u6807\u7b7e 2, \u6807\u7b7e 3</tags>
 """
+
 
 PLATFORM_DESCRIPTIONS = {
-    "wechat": "微信公众号风格:深度、有观点、有故事、配图位置自然(用 [图片:描述] 占位)",
-    "bjh": "百家号风格:直给、节奏快、信息密度高、首段必须亮观点",
+    "wechat": "\u5fae\u4fe1\u516c\u4f17\u53f7\u98ce\u683c:\u6709\u6df1\u5ea6\u3001\u6709\u89c2\u70b9\u3001\u80fd\u8ba9\u4eba\u60f3\u6536\u85cf",
+    "bjh": "\u767e\u5bb6\u53f7\u98ce\u683c:\u8282\u594f\u5feb\u3001\u4fe1\u606f\u5bc6\u5ea6\u9ad8\u3001\u9996\u6bb5\u5fc5\u987b\u4eae\u89c2\u70b9",
 }
 
 
 def get_article_system(platform: str, char_min: int, char_max: int) -> str:
+    style = random.choice(STYLES)
     return ARTICLE_SYSTEM.format(
-        char_min=char_min,
-        char_max=char_max,
+        role=ROLE,
+        style_name=style["name"],
+        style_desc=style["desc"],
         platform=platform,
         platform_desc=PLATFORM_DESCRIPTIONS.get(platform, ""),
+        char_min=char_min,
+        char_max=char_max,
+    )
+
+
+def get_article_user(topic: str, source: str, score, context: str) -> str:
+    return ARTICLE_USER.format(
+        topic=topic,
+        source=source,
+        score=score,
+        context=context,
+        bad=BAD_EXAMPLE,
+        good=GOOD_EXAMPLE,
     )

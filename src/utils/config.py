@@ -1,8 +1,4 @@
-﻿"""Config loader with safe defaults.
-
-Heavy dep `PyYAML` is imported lazily so this module loads even when missing
-(a minimal stdlib fallback parses a tiny subset of YAML used in config.example.yaml).
-"""
+﻿"""Config loader with safe defaults."""
 
 from __future__ import annotations
 
@@ -15,9 +11,18 @@ from pathlib import Path
 class VolcengineConfig:
     api_key: str = ""
     base_url: str = "https://ark.cn-beijing.volces.com/api/v3"
-    model: str = "deepseek-v3"
+    model: str = "deepseek-v3-241226"
     daily_token_budget: int = 100_000
     rpm_limit: int = 20
+
+
+@dataclass
+class LLMConfig:
+    """LLM generation parameters (separate from volcengine config to allow
+    provider-agnostic tweaking)."""
+    temperature: float = 1.0
+    presence_penalty: float = 0.6
+    frequency_penalty: float = 0.4
 
 
 @dataclass
@@ -41,6 +46,7 @@ class PlatformConfig:
 @dataclass
 class Config:
     volcengine: VolcengineConfig = field(default_factory=VolcengineConfig)
+    llm: LLMConfig = field(default_factory=LLMConfig)
     schedule: ScheduleConfig = field(default_factory=ScheduleConfig)
     output: OutputConfig = field(default_factory=OutputConfig)
     platforms: dict[str, PlatformConfig] = field(
@@ -56,14 +62,11 @@ class Config:
 
 
 def _strip_inline_comment(s: str) -> str:
-    """Remove trailing `# comment` from a value, but only outside quoted strings."""
     s = s.strip()
     if not s:
         return s
-    # If the value starts with a quote, the first # is part of the value (no stripping)
     if s[0] in ('"', "'"):
         return s
-    # Find unquoted # (rough heuristic: first # not preceded by whitespace inside a string)
     in_str = False
     quote = ""
     for i, c in enumerate(s):
@@ -79,7 +82,7 @@ def _strip_inline_comment(s: str) -> str:
     return s
 
 
-def _coerce(s: str):
+def _coerce(s):
     if s is None or s == "":
         return s
     if s.startswith('"') and s.endswith('"') and len(s) >= 2:
@@ -102,26 +105,20 @@ def _coerce(s: str):
 
 
 def _load_yaml(path: Path) -> dict:
-    """Load YAML; fall back to a minimal parser if PyYAML is missing."""
     if not path.exists():
         return {}
     text = path.read_text(encoding="utf-8")
     try:
-        import yaml  # type: ignore
+        import yaml
         return yaml.safe_load(text) or {}
     except ImportError:
         return _minimal_yaml(text)
 
 
 def _minimal_yaml(text: str) -> dict:
-    """Very small YAML subset parser for fallback when PyYAML is missing.
-
-    Supports: top-level keys, 2-space indented mappings, lists with `- value`.
-    Good enough for config.example.yaml but NOT for arbitrary YAML.
-    """
     out: dict = {}
-    current_key: str | None = None
-    list_key: str | None = None
+    current_key = None
+    list_key = None
     for raw in text.splitlines():
         line = raw.rstrip()
         if not line or line.lstrip().startswith("#"):
@@ -164,13 +161,13 @@ def _minimal_yaml(text: str) -> dict:
 
 
 def load_config(path: str | Path | None = None) -> Config:
-    """Load config from YAML; missing keys get defaults."""
     if path is None:
         path = os.environ.get("AUTOPOST_CONFIG", "./config.yaml")
     path = Path(path)
     raw = _load_yaml(path)
 
     v = raw.get("volcengine", {}) or {}
+    llm = raw.get("llm", {}) or {}
     s = raw.get("schedule", {}) or {}
     o = raw.get("output", {}) or {}
     p_raw = raw.get("platforms", {}) or {}
@@ -186,6 +183,11 @@ def load_config(path: str | Path | None = None) -> Config:
 
     return Config(
         volcengine=VolcengineConfig(**v),
+        llm=LLMConfig(
+            temperature=llm.get("temperature", 1.0),
+            presence_penalty=llm.get("presence_penalty", 0.6),
+            frequency_penalty=llm.get("frequency_penalty", 0.4),
+        ),
         schedule=ScheduleConfig(**s),
         output=OutputConfig(**o),
         platforms=platforms,

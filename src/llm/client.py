@@ -1,8 +1,4 @@
-﻿"""LLM client (OpenAI-compatible; works with volcengine/DeepSeek/Qwen).
-
-Heavy dependency `openai` is imported lazily so the module can be loaded
-even when the SDK is not installed.
-"""
+﻿"""LLM client (OpenAI-compatible; works with volcengine/DeepSeek/Qwen/GLM/etc)."""
 
 from __future__ import annotations
 
@@ -31,8 +27,6 @@ class LLMResult:
 
 
 class LLMError(Exception):
-    """Wraps an LLM error with a human-readable hint."""
-
     def __init__(self, code: str, message: str, hint: str = ""):
         self.code = code
         self.message = message
@@ -42,8 +36,6 @@ class LLMError(Exception):
 
 
 class LLMClient:
-    """Async client for OpenAI-compatible APIs."""
-
     def __init__(self, cfg: Config):
         self.cfg = cfg
         self._client: Any = None
@@ -75,14 +67,15 @@ class LLMClient:
         temperature: float = 0.9,
         max_tokens: int = 3000,
         json_mode: bool = False,
+        presence_penalty: float = 0.0,
+        frequency_penalty: float = 0.0,
     ) -> LLMResult:
         if not self.is_configured:
             try:
                 self._client = self._build_client()
             except RuntimeError as e:
                 raise LLMError(
-                    "NotConfigured",
-                    str(e),
+                    "NotConfigured", str(e),
                     hint="edit config.yaml and set volcengine.api_key to a real key",
                 ) from e
 
@@ -95,6 +88,11 @@ class LLMClient:
             "temperature": temperature,
             "max_tokens": max_tokens,
         }
+        # Only add penalties if non-zero (some providers reject 0)
+        if presence_penalty:
+            kwargs["presence_penalty"] = presence_penalty
+        if frequency_penalty:
+            kwargs["frequency_penalty"] = frequency_penalty
         if json_mode:
             kwargs["response_format"] = {"type": "json_object"}
 
@@ -127,19 +125,38 @@ class LLMClient:
         hint = ""
         if "InvalidEndpointOrModel.NotFound" in msg or "does not exist" in msg:
             hint = (
-                f"model name {self.cfg.volcengine.model!r} is not available in your account. "
+                f"model name {self.cfg.volcengine.model!r} is not available. "
                 f"Run `python -m src.main --list-models` to see what IS available."
             )
         elif "Authentication" in msg or "api_key" in msg.lower() or "401" in msg:
-            hint = "api_key is wrong or expired. Re-copy from volcengine console."
+            hint = "api_key is wrong or expired. Re-copy from provider console."
         elif "Quota" in msg or "insufficient" in msg.lower() or "balance" in msg.lower():
-            hint = "your Coding Plan quota is exhausted or balance is low."
+            hint = "quota exhausted or balance is low."
         elif "429" in msg or "rate" in msg.lower():
             hint = "rate limited; lower rpm_limit in config.yaml or wait."
         elif "Network" in msg or "Connection" in msg or "timeout" in msg.lower():
-            hint = "network issue; check connectivity to volcengine."
+            hint = "network issue; check connectivity to provider."
 
         return LLMError(code, msg, hint)
+
+    async def chat_structured(
+        self,
+        system: str,
+        user: str,
+        *,
+        temperature: float = 0.9,
+        max_tokens: int = 3000,
+        presence_penalty: float = 0.0,
+        frequency_penalty: float = 0.0,
+    ) -> dict:
+        result = await self.chat(
+            system, user,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            presence_penalty=presence_penalty,
+            frequency_penalty=frequency_penalty,
+        )
+        return _parse_structured_response(result.content)
 
     async def chat_json(
         self,
@@ -150,31 +167,21 @@ class LLMClient:
         max_tokens: int = 3000,
     ) -> tuple[dict, LLMResult]:
         result = await self.chat(system, user, temperature=temperature, max_tokens=max_tokens)
-        try:
-            return json.loads(result.content), result
-        except json.JSONDecodeError:
-            m = re.search(r"\{[\s\S]*\}", result.content)
-            if not m:
-                raise
-            return json.loads(m.group(0)), result
+        return _parse_json_lenient(result.content), result
 
     async def list_models(self) -> list[dict]:
-        """Call OpenAI-compatible /models endpoint and return list of model dicts."""
         if not self.is_configured:
             self._client = self._build_client()
-        # OpenAI SDK exposes models() at root
         try:
             resp = await self._client.models.list()
         except AttributeError:
-            # Some compatible providers don't expose .list(); fall back to raw HTTP
             try:
                 import httpx
             except ImportError as e:
                 raise LLMError(
                     "NoListEndpoint",
                     "this provider does not support listing models via SDK",
-                    hint="check the provider's docs for the available model list, "
-                         "or open the web console",
+                    hint="check the provider's docs or open the web console",
                 ) from e
             url = self.cfg.volcengine.base_url.rstrip("/") + "/models"
             async with httpx.AsyncClient(timeout=10) as c:
@@ -183,7 +190,6 @@ class LLMClient:
                 return r.json().get("data", [])
         except Exception as e:
             raise self._wrap_error(e) from e
-        # resp is a SyncPage-like object; iterate .data
         out: list[dict] = []
         for m in getattr(resp, "data", []):
             d = m.model_dump() if hasattr(m, "model_dump") else dict(m)
@@ -238,7 +244,6 @@ async def quick_test(client: LLMClient) -> bool:
 
 
 async def list_available_models(client: LLMClient) -> list[str]:
-    """List model IDs available to this api_key. Used by --list-models."""
     try:
         models = await client.list_models()
     except LLMError as e:
@@ -250,3 +255,88 @@ async def list_available_models(client: LLMClient) -> list[str]:
         log.error(f"failed to list models: {e}")
         return []
     return [m.get("id", "<no id>") for m in models]
+
+
+def _parse_structured_response(text: str) -> dict:
+    """Parse <title>...</title> <digest>...</digest> <content>...</content>.
+
+    Falls back to JSON, then to raw text. Never crashes.
+    """
+    out = _parse_tagged(text)
+    if out and out.get("content"):
+        return out
+    try:
+        parsed = _parse_json_lenient(text)
+        if isinstance(parsed, dict) and (parsed.get("content") or parsed.get("title")):
+            return {
+                "title": parsed.get("title", "").strip(),
+                "digest": parsed.get("digest", "").strip(),
+                "content": parsed.get("content", "").strip() or parsed.get("text", "").strip(),
+            }
+    except (json.JSONDecodeError, ValueError):
+        pass
+    log.warning("LLM response did not contain <content> tag or valid JSON; using raw text as content")
+    return {"title": "", "digest": "", "content": text.strip()}
+
+
+def _parse_tagged(text: str) -> dict:
+    s = re.sub(r"^```(?:[a-z]*)?\s*\n?", "", text.strip(), flags=re.MULTILINE)
+    s = re.sub(r"\n?```\s*$", "", s, flags=re.MULTILINE)
+
+    def _extract(tag: str) -> str:
+        m = re.search(
+            rf"<{tag}>\s*(.*?)\s*</{tag}>",
+            s,
+            re.DOTALL | re.IGNORECASE,
+        )
+        return m.group(1).strip() if m else ""
+
+    title = _extract("title")
+    digest = _extract("digest")
+    content = _extract("content")
+    if not content:
+        return {}
+    return {"title": title, "digest": digest, "content": content}
+
+
+def _parse_json_lenient(text: str) -> dict:
+    s = text.strip()
+    s = re.sub(r"^```(?:json)?\s*\n?", "", s, flags=re.MULTILINE)
+    s = re.sub(r"\n?```\s*$", "", s, flags=re.MULTILINE)
+
+    start = s.find("{")
+    if start == -1:
+        raise json.JSONDecodeError("no JSON object found", s, 0)
+
+    depth = 0
+    in_str = False
+    escape = False
+    end = -1
+    for i in range(start, len(s)):
+        c = s[i]
+        if in_str:
+            if escape:
+                escape = False
+            elif c == "\\":
+                escape = True
+            elif c == '"':
+                in_str = False
+            continue
+        if c == '"':
+            in_str = True
+        elif c == "{":
+            depth += 1
+        elif c == "}":
+            depth -= 1
+            if depth == 0:
+                end = i
+                break
+
+    if end == -1:
+        raise json.JSONDecodeError("unbalanced braces", s, start)
+
+    candidate = s[start : end + 1]
+    try:
+        return json.loads(candidate)
+    except json.JSONDecodeError:
+        return json.loads(candidate, strict=False)

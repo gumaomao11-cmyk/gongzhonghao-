@@ -1,59 +1,38 @@
-﻿"""Article generation pipeline: title + body + tags via LLM."""
+﻿"""Article generation pipeline with style randomization + structured parsing."""
 
 from __future__ import annotations
 
-import asyncio
-import json
 import logging
+import random
 from typing import Awaitable, Callable
 
-from ..llm.client import LLMClient, LLMError, gather_with_rate_limit
-from ..llm.prompts import (
-    ARTICLE_USER,
-    TAG_USER,
-    TITLE_USER,
-    get_article_system,
-)
+from ..llm.client import LLMClient, LLMError
+from ..llm.prompts import TAG_SYSTEM, TAG_USER, get_article_system, get_article_user
 from ..utils.config import Config
-from ..utils.cost import CostTracker, estimate_tokens
+from ..utils.cost import CostTracker
 
 log = logging.getLogger("autopost.writer")
 
 
-# === Mock generator (for testing without LLM) ===
-
-MOCK_BANNER = "⚠️ MOCK 模式 — 这是模板,不是 AI 生成,发布前必须用真 LLM 重跑"
+MOCK_BANNER = "\u26a0\ufe0f MOCK \u6a21\u5f0f \u2014 \u8fd9\u662f\u6a21\u677f\uff0c\u4e0d\u662f AI \u751f\u6210\uff0c\u53d1\u5e03\u524d\u5fc5\u987b\u7528\u771f LLM \u91cd\u8dd1"
 
 
 def mock_generate(topic: dict, platform: str) -> dict:
-    """Generate a plausible-looking article locally without LLM calls.
-
-    Output is intentionally watermarked so it cannot be mistaken for a real article.
-    """
     title = topic["title"]
-    category = topic.get("category", "其他")
+    category = topic.get("category", "\u5176\u4ed6")
     return {
-        "title": f"[MOCK] {title} 模板测试稿",
-        "digest": f"⚠️ MOCK 模式,非真实生成。今天 {title} 上了热搜(模拟)。",
+        "title": f"[MOCK] {title} \u6a21\u677f\u6d4b\u8bd5\u7a3f",
+        "digest": f"\u26a0\ufe0f MOCK \u6a21\u5f0f\u3002\u4eca\u5929 {title} \u4e0a\u4e86\u70ed\u641c(\u6a21\u62df)\u3002",
         "content": (
             f"{MOCK_BANNER}\n\n"
-            f"# {title} 模板测试\n\n"
-            f"⚠️ 这是 mock 数据,用于流程演示。\n\n"
-            f"这两天,{title} 这个话题(模拟)彻底刷屏了。有人说这是反转,有人说是炒作。"
-            f"作为一个在 {category} 领域(模拟)摸爬滚打多年的观察者,我有一些不吐不快的观点。\n\n"
-            f"# 三个被忽略的细节(模拟)\n\n"
-            f"第一,时间线。绝大多数讨论只截取了一个片段,如果你把过去一周的相关报道串起来看,"
-            f"会发现事情远没有那么简单。\n\n"
-            f"第二,角色立场。每个发声的人都有自己的利益相关,他们的表态,本身就是信息。\n\n"
-            f"第三,情绪传染。社交媒体时代,流量会自我强化——这不代表真相,只代表关注度。\n\n"
-            f"**真相从来不是非黑即白,而是层层叠叠的灰色。** (模拟金句)\n\n"
-            f"# 我们真正该思考的\n\n"
-            f"比起 {title} 本身,更值得讨论的是:为什么我们会对这样的事件如此上头?"
-            f"这背后,可能藏着更深层的社会心理。\n\n"
-            f"你怎么看?评论区聊聊。\n\n"
-            f"---\n{MOCK_BANNER}\n"
+            f"# {title} \u6a21\u677f\u6d4b\u8bd5\n\n"
+            f"\u26a0\ufe0f \u8fd9\u662f mock \u6570\u636e\u3002\n\n"
+            f"{title} \u8fd9\u4e2a\u8bdd\u9898(\u6a21\u62df)\u70ed\u4e86\u3002\u6211\u4e2a\u4eba\u89c2\u70b9\u662f\uff1a\u522b\u5403\u74dc\u3002\n\n"
+            f"\u4ec0\u4e48?\u4f60\u95ee\u6211\u4e3a\u4ec0\u4e48?\u56e0\u4e3a\u4f60\u4f1a\u80a0\u5b50\u4e0d\u8212\u670d\u3002\n\n"
+            f"**\u771f\u76f8\u5f88\u7b80\u5355\u3002**\n\n"
+            f"\u5f00\u73a9\u7b11\u7684\u3002\u4f60\u8981\u662f\u4e0d\u4e50\u610f\u770b\u5230\u8fd9\u91cc\u5c31\u5f53\u6211\u6ca1\u8bf4\u3002\n"
         ),
-        "tags": [category, "MOCK", "测试", "模板"],
+        "tags": [category, "MOCK", "\u6d4b\u8bd5", "\u6a21\u677f"],
     }
 
 
@@ -63,24 +42,38 @@ async def _gen_one_article(
     platform: str,
     cfg: Config,
 ) -> dict | None:
-    """Generate one article (title + body) for a topic on a given platform."""
+    """Generate one article with randomized style."""
     platform_cfg = cfg.platforms[platform]
     system = get_article_system(platform, platform_cfg.char_min, platform_cfg.char_max)
-    user = ARTICLE_USER.format(
+    user = get_article_user(
         topic=topic["title"],
         source=topic.get("source", ""),
         score=topic.get("score", 0),
-        context=topic.get("context") or f"热搜来源:{topic.get('source')},无更多上下文",
+        context=topic.get("context") or f"\u70ed\u641c\u6765\u6e90\uff1a{topic.get('source')}\uff0c\u65e0\u66f4\u591a\u4e0a\u4e0b\u6587",
     )
+
+    # Higher temperature + presence/frequency penalty = less AI-flavored
+    temperature = getattr(cfg.llm, "temperature", 1.0)
+    presence_penalty = getattr(cfg.llm, "presence_penalty", 0.6)
+    frequency_penalty = getattr(cfg.llm, "frequency_penalty", 0.4)
+
     try:
-        data, result = await client.chat_json(
-            system, user, temperature=0.9, max_tokens=platform_cfg.char_max * 2
+        data = await client.chat_structured(
+            system, user,
+            temperature=temperature,
+            max_tokens=platform_cfg.char_max * 2,
+            presence_penalty=presence_penalty,
+            frequency_penalty=frequency_penalty,
         )
+        from ..utils.cost import estimate_tokens
         return {
-            "title": data.get("title", topic["title"]),
+            "title": data.get("title") or topic["title"],
             "digest": data.get("digest", ""),
             "content": data.get("content", ""),
-            "_usage": {"in": result.input_tokens, "out": result.output_tokens},
+            "_usage": {
+                "in": estimate_tokens(system + user),
+                "out": estimate_tokens(data.get("content", "")),
+            },
         }
     except LLMError:
         raise
@@ -90,20 +83,30 @@ async def _gen_one_article(
 
 
 async def _gen_tags(client: LLMClient, article: dict) -> list[str]:
-    """Generate platform tags for an article."""
     try:
-        data, _ = await client.chat_json(
-            "你是内容运营,擅长给文章打精准分类标签。",
-            TAG_USER.format(
+        result = await client.chat(
+            system=TAG_SYSTEM,
+            user=TAG_USER.format(
                 title=article["title"],
                 category=article.get("category", ""),
                 preview=article["content"][:200],
             ),
             temperature=0.5,
-            max_tokens=100,
+            max_tokens=200,
         )
-        tags = data.get("tags", [])
-        return [str(t).strip() for t in tags if t]
+        import re
+        m = re.search(r"<tags>(.*?)</tags>", result.content, re.DOTALL | re.IGNORECASE)
+        if m:
+            tags_raw = m.group(1)
+            tags = [t.strip().lstrip("#") for t in tags_raw.replace("\uff0c", ",").split(",") if t.strip()]
+            return tags
+        from ..llm.client import _parse_json_lenient
+        try:
+            data = _parse_json_lenient(result.content)
+            tags = data.get("tags", [])
+            return [str(t).strip() for t in tags if t]
+        except Exception:
+            return []
     except LLMError:
         raise
     except Exception as e:
@@ -121,14 +124,6 @@ async def write_articles(
     use_mock: bool = False,
     on_progress: Callable[[int, int], Awaitable[None]] | None = None,
 ) -> list[dict]:
-    """Generate articles for all (topic × platform) pairs.
-
-    Returns list of dicts: {topic, platform, title, digest, content, tags, usage}.
-
-    If a single LLM call raises LLMError, the error is logged with hint and
-    that article is skipped; remaining articles continue. The first LLMError
-    surfaces up so the caller can decide to abort the whole batch.
-    """
     if platforms is None:
         platforms = [p for p, c in cfg.platforms.items() if c.enabled]
 
@@ -145,12 +140,11 @@ async def write_articles(
                 return results
 
             if use_mock:
-                log.warning(f"[MOCK] generating fixture for {topic['title']!r} (--mock is on)")
+                log.warning(f"[MOCK] generating fixture for {topic['title']!r}")
                 art = mock_generate(topic, platform)
                 art["_usage"] = {"in": 0, "out": 0}
             elif not client.is_configured:
                 log.error("LLM not configured; falling back to mock for this article")
-                log.error("fix: set volcengine.api_key in config.yaml, then re-run WITHOUT --mock")
                 art = mock_generate(topic, platform)
                 art["_usage"] = {"in": 0, "out": 0}
             else:
@@ -167,9 +161,8 @@ async def write_articles(
                         await on_progress(done, total)
                     continue
 
-            # Tags
             if use_mock or not client.is_configured:
-                tags = art.get("tags", [topic.get("category", "其他")])
+                tags = art.get("tags", [topic.get("category", "\u5176\u4ed6")])
             else:
                 try:
                     tags = await _gen_tags(client, art)
@@ -177,7 +170,7 @@ async def write_articles(
                     log.warning(f"tag gen failed for {art['title']!r}: {e}")
                     tags = []
                 if not tags:
-                    tags = [topic.get("category", "其他")]
+                    tags = [topic.get("category", "\u5176\u4ed6")]
 
             usage = art.get("_usage", {})
             cost.add(usage.get("in", 0) + usage.get("out", 0))
